@@ -51,7 +51,7 @@ impl Context {
         Ok((Context {}, Version(version_code)))
     }
 
-    fn devices(&self, only_local: bool) -> Result<impl Iterator<Item = Device>, Error> {
+    fn devices(&self, only_local: bool) -> Result<impl ExactSizeIterator<Item = Device>, Error> {
         let mut device_list: *mut *const SANE_Device = std::ptr::null_mut();
         unsafe {
             checked(|| sane_get_devices(&mut device_list, only_local as _))?;
@@ -65,12 +65,16 @@ impl Context {
                 num_devices += 1;
             }
         }
-        println!("{}", num_devices);
 
         Ok((0..num_devices).map(move |i| {
             let device = unsafe { *device_list.offset(i) };
             Device(device)
         }))
+    }
+}
+impl Drop for Context {
+    fn drop(&mut self) {
+        unsafe { sane_exit() }
     }
 }
 
@@ -93,11 +97,65 @@ impl Device {
         let cstr = unsafe { CStr::from_ptr((*self.0).type_) };
         cstr.to_str().unwrap()
     }
+    fn open(&self) -> Result<Handle, Error> {
+        let mut handle = std::ptr::null_mut();
+        unsafe { checked(|| sane_open((*self.0).name, &mut handle))? };
+
+        Ok(Handle(handle))
+    }
 }
 
-impl Drop for Context {
+struct Handle(SANE_Handle);
+
+impl Drop for Handle {
     fn drop(&mut self) {
-        unsafe { sane_exit() }
+        unsafe { sane_close(self.0) }
+    }
+}
+
+impl Handle {
+    fn descriptors(&self) -> impl ExactSizeIterator<Item = Descriptor> + '_ {
+        // Guaranteed to exist
+        let first_desc = self.get_descriptor(0).unwrap();
+        assert_eq!(first_desc.type_(), SANE_Value_Type_SANE_TYPE_INT);
+        assert_eq!(first_desc.size(), std::mem::size_of::<SANE_Int>() as _);
+        let mut num_desc: SANE_Int = 0;
+        unsafe {
+            checked(|| {
+                sane_control_option(
+                    self.0,
+                    0,
+                    SANE_Action_SANE_ACTION_GET_VALUE,
+                    &mut num_desc as *mut _ as _,
+                    std::ptr::null_mut(),
+                )
+            })
+            .unwrap()
+        };
+        (0..num_desc).map(move |i| self.get_descriptor(i as _).unwrap())
+    }
+    fn get_descriptor(&self, index: usize) -> Option<Descriptor> {
+        let desc = unsafe { sane_get_option_descriptor(self.0, index as _) };
+        if desc.is_null() {
+            None
+        } else {
+            Some(Descriptor(desc))
+        }
+    }
+}
+
+struct Descriptor(*const SANE_Option_Descriptor);
+
+impl Descriptor {
+    fn name(&self) -> &str {
+        let cstr = unsafe { CStr::from_ptr((*self.0).name) };
+        cstr.to_str().unwrap()
+    }
+    fn type_(&self) -> SANE_Value_Type {
+        unsafe { (*self.0).type_ }
+    }
+    fn size(&self) -> SANE_Int {
+        unsafe { (*self.0).size }
     }
 }
 
@@ -125,11 +183,22 @@ fn main() {
         version.minor(),
         version.build()
     );
+    let mut chosen_device = None;
     for device in context.devices(true).unwrap() {
         println!("Device:");
-        println!("\tname: {}", device.name());
+        let name = device.name();
+        println!("\tname: {}", name);
         println!("\tvendor: {}", device.vendor());
         println!("\tmodel: {}", device.model());
         println!("\ttype: {}", device.type_());
+        chosen_device = Some(device);
+    }
+
+    let device = chosen_device.unwrap();
+    let handle = device.open().unwrap();
+
+    println!("Options:");
+    for descriptor in handle.descriptors() {
+        println!("\t{}", descriptor.name());
     }
 }
