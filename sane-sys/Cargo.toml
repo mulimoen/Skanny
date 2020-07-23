@@ -1,0 +1,13 @@
+[package]
+name = "sane-sys"
+version = "0.1.0"
+authors = ["Magnus Ulimoen <magnus@ulimoen.dev>"]
+edition = "2018"
+links = "sane"
+build = "build.rs"
+readme = "README.md"
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.54.1"

@@ -1,0 +1,12 @@
+[package]
+name = "skanny"
+version = "0.1.0"
+authors = ["Magnus Ulimoen <magnus@ulimoen.dev>"]
+edition = "2018"
+
+[dependencies]
+
+[workspace]
+members = [
+    "sane-sys"
+]
