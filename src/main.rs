@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use sane_sys::*;
 use std::ffi::CStr;
 
@@ -78,6 +80,22 @@ impl Drop for Context {
     }
 }
 
+#[derive(Copy, Clone)]
+#[repr(transparent)]
+struct Version(SANE_Int);
+
+impl Version {
+    fn major(self) -> SANE_Word {
+        SANE_VERSION_MAJOR(self.0)
+    }
+    fn minor(self) -> SANE_Word {
+        SANE_VERSION_MINOR(self.0)
+    }
+    fn build(self) -> SANE_Word {
+        SANE_VERSION_BUILD(self.0)
+    }
+}
+
 struct Device(*const SANE_Device);
 
 impl Device {
@@ -142,6 +160,17 @@ impl Handle {
             Some(Descriptor(desc))
         }
     }
+    fn parameters(&self) -> Result<Parameters, Error> {
+        let mut parameters = std::mem::MaybeUninit::uninit();
+        unsafe { checked(|| sane_get_parameters(self.0, parameters.as_mut_ptr()))? }
+        Ok(Parameters(unsafe { parameters.assume_init() }))
+    }
+    fn start(&self) -> Result<(), Error> {
+        unsafe { checked(|| sane_start(self.0)) }
+    }
+    fn cancel(&self) {
+        unsafe { sane_cancel(self.0) }
+    }
 }
 
 struct Descriptor(*const SANE_Option_Descriptor);
@@ -159,19 +188,27 @@ impl Descriptor {
     }
 }
 
-#[derive(Copy, Clone)]
-#[repr(transparent)]
-struct Version(SANE_Int);
+#[derive(Debug, Clone)]
+struct Parameters(SANE_Parameters);
 
-impl Version {
-    fn major(self) -> SANE_Word {
-        SANE_VERSION_MAJOR(self.0)
+impl Parameters {
+    fn format(&self) -> SANE_Frame {
+        self.0.format
     }
-    fn minor(self) -> SANE_Word {
-        SANE_VERSION_MINOR(self.0)
+    fn last_frame(&self) -> SANE_Bool {
+        self.0.last_frame
     }
-    fn build(self) -> SANE_Word {
-        SANE_VERSION_BUILD(self.0)
+    fn bytes_per_line(&self) -> SANE_Int {
+        self.0.bytes_per_line
+    }
+    fn pixels_per_line(&self) -> SANE_Int {
+        self.0.pixels_per_line
+    }
+    fn lines(&self) -> SANE_Int {
+        self.0.lines
+    }
+    fn depth(&self) -> SANE_Int {
+        self.0.depth
     }
 }
 
@@ -201,4 +238,10 @@ fn main() {
     for descriptor in handle.descriptors() {
         println!("\t{}", descriptor.name());
     }
+
+    let parameters = handle.parameters().unwrap();
+    println!("{:?}", parameters);
+
+    handle.start().unwrap();
+    handle.cancel();
 }
