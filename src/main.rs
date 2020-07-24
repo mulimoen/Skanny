@@ -295,7 +295,8 @@ impl Opt {
                 )
             })?;
         }
-        assert_eq!(val.pop(), Some(0));
+        let first_zero = val.iter().position(|&x| x == 0).unwrap_or(val.len());
+        val.resize(first_zero, 0);
         Ok(String::from_utf8(val).unwrap())
     }
     fn set_string(&self, val: &str) -> Result<(), Error> {
@@ -344,23 +345,11 @@ struct Acquisition<'a> {
 
 impl<'a> Acquisition<'a> {
     fn cancel(self) {}
+    fn restart(&self) -> Result<(), Error> {
+        self.handle.start().map(|x| std::mem::forget(x))
+    }
 
-    fn get_image(self) -> Result<Image, Error> {
-        let parameters = self.handle.parameters()?;
-
-        let bytesize = parameters.bytes_per_line()
-            * (parameters.depth() / 8)
-            * parameters.lines()
-            * if parameters.format() == SANE_Frame_SANE_FRAME_GRAY {
-                1
-            } else {
-                3
-            };
-        let mut image = vec![0_u8; bytesize as _];
-
-        let mut buffer = &mut image[..];
-        // unsafe { checked(|| sane_set_io_mode(self.handle.0, SANE_FALSE as _))? };
-
+    fn read_image(&self, mut buffer: &mut [u8]) -> Result<(), Error> {
         unsafe {
             'read_loop: loop {
                 let mut len = 0;
@@ -384,6 +373,31 @@ impl<'a> Acquisition<'a> {
             }
         }
         assert_eq!(buffer.len(), 0);
+        Ok(())
+    }
+
+    fn get_image(self) -> Result<Image, Error> {
+        let parameters = self.handle.parameters()?;
+
+        let bytesize = parameters.pixels_per_line()
+            * (parameters.depth() / 8)
+            * parameters.lines()
+            * if parameters.format() == SANE_Frame_SANE_FRAME_GRAY {
+                1
+            } else {
+                3
+            };
+        let mut image = vec![0_u8; bytesize as _];
+
+        // unsafe { checked(|| sane_set_io_mode(self.handle.0, SANE_FALSE as _))? };
+        #[allow(non_upper_case_globals)]
+        match parameters.format() {
+            SANE_Frame_SANE_FRAME_GRAY => self.read_image(&mut image[..])?,
+            SANE_Frame_SANE_FRAME_RGB => {
+                self.read_image(&mut image[..])?;
+            }
+            format => todo!("format: {}", format),
+        };
 
         #[allow(non_upper_case_globals)]
         match (parameters.format(), parameters.depth()) {
@@ -395,7 +409,15 @@ impl<'a> Acquisition<'a> {
                 )
                 .unwrap(),
             )),
-            (_, _) => unimplemented!(),
+            (SANE_Frame_SANE_FRAME_RGB, 8) => Ok(Image::Rgb8(
+                image::ImageBuffer::from_raw(
+                    parameters.pixels_per_line() as _,
+                    parameters.lines() as _,
+                    image,
+                )
+                .unwrap(),
+            )),
+            (format, depth) => unimplemented!("format: {} depth: {}", format, depth),
         }
     }
 }
@@ -407,7 +429,7 @@ impl Drop for Acquisition<'_> {
 }
 
 enum Image {
-    // Rgb8(image::ImageBuffer<image::Rgb<u8>, Vec<u8>>),
+    Rgb8(image::ImageBuffer<image::Rgb<u8>, Vec<u8>>),
     Gray8(image::ImageBuffer<image::Luma<u8>, Vec<u8>>),
 }
 
@@ -415,6 +437,7 @@ impl Image {
     fn save(&self, path: impl AsRef<std::path::Path>) -> image::ImageResult<()> {
         match self {
             Image::Gray8(im) => im.save(path),
+            Image::Rgb8(im) => im.save(path),
         }
     }
 }
@@ -459,13 +482,17 @@ fn main() {
         }
         match optname {
             "mode" => {
+                let active_mode = option.get_string().unwrap();
                 print!("\t\t");
                 for opt in option.string_constraints().unwrap() {
-                    print!("{}\t", opt);
+                    if opt == active_mode {
+                        print!("[{}]\t", opt);
+                    } else {
+                        print!("{}\t", opt);
+                    }
                 }
                 println!();
-                println!("\t\tActive mode: {}", option.get_string().unwrap());
-                // option.set_string("Gray").unwrap();
+                option.set_string("Color").unwrap();
             }
             "depth" => {
                 println!("\t\tCurrent depth: {}", option.get_int().unwrap());
