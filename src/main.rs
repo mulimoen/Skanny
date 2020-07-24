@@ -8,6 +8,12 @@ enum Error {
     Status(SANE_Status),
 }
 
+impl Error {
+    fn is_eof(self) -> bool {
+        self == Error::Status(SANE_Status_SANE_STATUS_EOF)
+    }
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         #[allow(non_upper_case_globals)]
@@ -175,8 +181,22 @@ struct Descriptor(*const SANE_Option_Descriptor);
 
 impl Descriptor {
     fn name(&self) -> &str {
-        let cstr = unsafe { CStr::from_ptr((*self.0).name) };
-        cstr.to_str().unwrap()
+        let name = unsafe { (*self.0).name };
+        if name.is_null() {
+            ""
+        } else {
+            let cstr = unsafe { CStr::from_ptr(name) };
+            cstr.to_str().unwrap()
+        }
+    }
+    fn desc(&self) -> &str {
+        let desc = unsafe { (*self.0).desc };
+        if desc.is_null() {
+            ""
+        } else {
+            let cstr = unsafe { CStr::from_ptr(desc) };
+            cstr.to_str().unwrap()
+        }
     }
     fn type_(&self) -> SANE_Value_Type {
         unsafe { (*self.0).type_ }
@@ -216,6 +236,43 @@ struct Acquisition<'a> {
 
 impl<'a> Acquisition<'a> {
     fn cancel(self) {}
+
+    fn get_image(self) -> Result<(), Error> {
+        let parameters = self.handle.parameters()?;
+
+        let bytesize = parameters.bytes_per_line() * parameters.lines() * parameters.depth();
+        let mut image = Vec::<u8>::with_capacity(bytesize as _);
+
+        let mut len = 0;
+        unsafe { checked(|| sane_set_io_mode(self.handle.0, SANE_FALSE as _))? };
+
+        unsafe {
+            'read_loop: loop {
+                let e = checked(|| {
+                    sane_read(
+                        self.handle.0,
+                        image.as_mut_ptr(),
+                        image.len() as _,
+                        &mut len,
+                    )
+                });
+                if let Err(err) = e {
+                    if err.is_eof() {
+                        break 'read_loop;
+                    } else {
+                        return Err(err);
+                    }
+                }
+                if len != 0 {
+                    panic!()
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+        println!("{}", len);
+
+        Ok(())
+    }
 }
 
 impl Drop for Acquisition<'_> {
@@ -249,10 +306,12 @@ fn main() {
     println!("Options:");
     for descriptor in handle.descriptors() {
         println!("\t{}", descriptor.name());
+        println!("\t\t{}", descriptor.desc());
     }
 
     let parameters = handle.parameters().unwrap();
     println!("{:?}", parameters);
 
     let acq = handle.start().unwrap();
+    let image = acq.get_image().unwrap();
 }
