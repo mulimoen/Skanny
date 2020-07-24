@@ -166,6 +166,16 @@ impl Handle {
             Some(Descriptor(desc))
         }
     }
+    fn options(&self) -> impl ExactSizeIterator<Item = Opt> + '_ {
+        self.descriptors()
+            .enumerate()
+            .map(move |(index, descriptor)| Opt {
+                handle: &self.0,
+                index: index + 1, /* skipping first descriptor */
+                descriptor,
+            })
+    }
+
     fn parameters(&self) -> Result<Parameters, Error> {
         let mut parameters = std::mem::MaybeUninit::uninit();
         unsafe { checked(|| sane_get_parameters(self.0, parameters.as_mut_ptr()))? }
@@ -177,6 +187,7 @@ impl Handle {
     }
 }
 
+#[derive(Debug)]
 struct Descriptor(*const SANE_Option_Descriptor);
 
 impl Descriptor {
@@ -227,6 +238,97 @@ impl Parameters {
     }
     fn depth(&self) -> SANE_Int {
         self.0.depth
+    }
+}
+
+#[derive(Debug)]
+struct Opt {
+    handle: *const SANE_Handle,
+    descriptor: Descriptor,
+    index: usize,
+}
+
+impl Opt {
+    fn name(&self) -> &str {
+        self.descriptor.name()
+    }
+    fn desc(&self) -> &str {
+        self.descriptor.desc()
+    }
+    fn string_constraints(&self) -> Result<impl ExactSizeIterator<Item = &str>, Error> {
+        #[allow(non_upper_case_globals)]
+        match unsafe { (*self.descriptor.0) }.constraint_type {
+            SANE_Constraint_Type_SANE_CONSTRAINT_STRING_LIST => (),
+            typ => panic!("type {} is not a string constraint", typ),
+        }
+        let mut len = 0;
+        let mut walker = unsafe { { *self.descriptor.0 }.constraint.string_list };
+        unsafe {
+            while !(*walker).is_null() {
+                len += 1;
+                walker = walker.offset(1);
+            }
+        }
+        Ok((0..len).map(move |i| unsafe {
+            let list = (*self.descriptor.0).constraint.string_list;
+            let cstr = std::ffi::CStr::from_ptr(*list.offset(i) as _);
+            cstr.to_str().unwrap()
+        }))
+    }
+    fn get_string(&self) -> Result<String, Error> {
+        assert_eq!(self.descriptor.type_(), SANE_Value_Type_SANE_TYPE_STRING);
+        let mut val: Vec<u8> = vec![0; self.descriptor.size() as _];
+        unsafe {
+            checked(|| {
+                sane_control_option(
+                    *self.handle,
+                    self.index as i32,
+                    SANE_Action_SANE_ACTION_GET_VALUE,
+                    val.as_mut_ptr() as *mut _,
+                    std::ptr::null_mut(),
+                )
+            })?;
+        }
+        assert_eq!(val.pop(), Some(0));
+        Ok(String::from_utf8(val).unwrap())
+    }
+    fn set_string(&self, val: &str) -> Result<(), Error> {
+        assert_eq!(self.descriptor.type_(), SANE_Value_Type_SANE_TYPE_STRING);
+
+        let mut val = val.as_bytes().to_vec();
+        val.push(0);
+
+        let mut info = 0;
+        unsafe {
+            checked(|| {
+                sane_control_option(
+                    *self.handle,
+                    self.index as _,
+                    SANE_Action_SANE_ACTION_SET_VALUE,
+                    val.as_mut_ptr() as *mut _,
+                    &mut info,
+                )
+            })?;
+        };
+
+        Ok(())
+    }
+    fn get_int(&self) -> Result<SANE_Int, Error> {
+        assert_eq!(self.descriptor.type_(), SANE_Value_Type_SANE_TYPE_INT);
+        assert_eq!(self.descriptor.size(), std::mem::size_of::<SANE_Int>() as _);
+        let mut val = 0;
+        unsafe {
+            checked(|| {
+                sane_control_option(
+                    *self.handle,
+                    self.index as i32,
+                    SANE_Action_SANE_ACTION_GET_VALUE,
+                    &mut val as *mut _ as _,
+                    std::ptr::null_mut(),
+                )
+            })?;
+        }
+        Ok(val)
     }
 }
 
@@ -304,14 +406,33 @@ fn main() {
     let handle = device.open().unwrap();
 
     println!("Options:");
-    for descriptor in handle.descriptors() {
-        println!("\t{}", descriptor.name());
-        println!("\t\t{}", descriptor.desc());
+    for option in handle.options() {
+        let optname = option.name();
+        if optname.is_empty() {
+            continue;
+        }
+        println!("\t{}", optname);
+        println!("\t\t{}", option.desc());
+        match optname {
+            "mode" => {
+                print!("\t\t");
+                for opt in option.string_constraints().unwrap() {
+                    print!("{}\t", opt);
+                }
+                println!();
+                println!("\t\tActive mode: {}", option.get_string().unwrap());
+                // option.set_string("Gray").unwrap();
+            }
+            "depth" => {
+                println!("\t\tCurrent depth: {}", option.get_int().unwrap());
+            }
+            _ => {}
+        }
     }
 
     let parameters = handle.parameters().unwrap();
     println!("{:?}", parameters);
 
-    let acq = handle.start().unwrap();
-    let image = acq.get_image().unwrap();
+    // let acq = handle.start().unwrap();
+    // let image = acq.get_image().unwrap();
 }
