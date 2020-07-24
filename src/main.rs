@@ -348,22 +348,24 @@ impl<'a> Acquisition<'a> {
     fn get_image(self) -> Result<(), Error> {
         let parameters = self.handle.parameters()?;
 
-        let bytesize = parameters.bytes_per_line() * parameters.lines() * parameters.depth();
-        let mut image = Vec::<u8>::with_capacity(bytesize as _);
+        let bytesize = parameters.bytes_per_line() * parameters.depth();
+        let mut image = vec![0_u8; bytesize as _];
 
-        let mut len = 0;
+        let mut buffer = &mut image[..];
         // unsafe { checked(|| sane_set_io_mode(self.handle.0, SANE_FALSE as _))? };
 
         unsafe {
             'read_loop: loop {
+                let mut len = 0;
                 let e = checked(|| {
                     sane_read(
                         self.handle.0,
-                        image.as_mut_ptr(),
-                        image.len() as _,
+                        buffer.as_mut_ptr(),
+                        buffer.len() as _,
                         &mut len,
                     )
                 });
+                buffer = &mut buffer[len as usize..];
                 if let Err(err) = e {
                     if err.is_eof() {
                         break 'read_loop;
@@ -371,13 +373,10 @@ impl<'a> Acquisition<'a> {
                         return Err(err);
                     }
                 }
-                if len != 0 {
-                    panic!()
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                // std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
-        println!("{}", len);
+        assert_eq!(buffer.len(), 0);
 
         Ok(())
     }
