@@ -150,7 +150,7 @@ impl Handle {
             })
             .unwrap()
         };
-        (0..num_desc).map(move |i| self.get_descriptor(i as _).unwrap())
+        (1..num_desc).map(move |i| self.get_descriptor(i as _).unwrap())
     }
     fn get_descriptor(&self, index: usize) -> Option<Descriptor> {
         let desc = unsafe { sane_get_option_descriptor(self.0, index as _) };
@@ -165,11 +165,9 @@ impl Handle {
         unsafe { checked(|| sane_get_parameters(self.0, parameters.as_mut_ptr()))? }
         Ok(Parameters(unsafe { parameters.assume_init() }))
     }
-    fn start(&self) -> Result<(), Error> {
-        unsafe { checked(|| sane_start(self.0)) }
-    }
-    fn cancel(&self) {
-        unsafe { sane_cancel(self.0) }
+    fn start(&self) -> Result<Acquisition, Error> {
+        unsafe { checked(|| sane_start(self.0)) };
+        Ok(Acquisition { handle: &self })
     }
 }
 
@@ -212,6 +210,20 @@ impl Parameters {
     }
 }
 
+struct Acquisition<'a> {
+    handle: &'a Handle,
+}
+
+impl<'a> Acquisition<'a> {
+    fn cancel(self) {}
+}
+
+impl Drop for Acquisition<'_> {
+    fn drop(&mut self) {
+        unsafe { sane_cancel(self.handle.0) }
+    }
+}
+
 fn main() {
     let (context, version) = Context::init().unwrap();
     println!(
@@ -242,6 +254,5 @@ fn main() {
     let parameters = handle.parameters().unwrap();
     println!("{:?}", parameters);
 
-    handle.start().unwrap();
-    handle.cancel();
+    let acq = handle.start().unwrap();
 }
