@@ -138,6 +138,12 @@ impl Drop for Handle {
 }
 
 impl Handle {
+    fn from_name(name: &str) -> Result<Self, Error> {
+        let name = std::ffi::CString::new(name).unwrap();
+        let mut handle = std::ptr::null_mut();
+        unsafe { checked(|| sane_open(name.as_ptr(), &mut handle))? };
+        Ok(Self(handle))
+    }
     fn descriptors(&self) -> impl ExactSizeIterator<Item = Descriptor> + '_ {
         // Guaranteed to exist
         let first_desc = self.get_descriptor(0).unwrap();
@@ -346,7 +352,7 @@ impl<'a> Acquisition<'a> {
         let mut image = Vec::<u8>::with_capacity(bytesize as _);
 
         let mut len = 0;
-        unsafe { checked(|| sane_set_io_mode(self.handle.0, SANE_FALSE as _))? };
+        // unsafe { checked(|| sane_set_io_mode(self.handle.0, SANE_FALSE as _))? };
 
         unsafe {
             'read_loop: loop {
@@ -383,6 +389,8 @@ impl Drop for Acquisition<'_> {
     }
 }
 
+const TESTDEVICE: bool = true;
+
 fn main() {
     let (context, version) = Context::init().unwrap();
     println!(
@@ -391,19 +399,23 @@ fn main() {
         version.minor(),
         version.build()
     );
-    let mut chosen_device = None;
-    for device in context.devices(true).unwrap() {
-        println!("Device:");
-        let name = device.name();
-        println!("\tname: {}", name);
-        println!("\tvendor: {}", device.vendor());
-        println!("\tmodel: {}", device.model());
-        println!("\ttype: {}", device.type_());
-        chosen_device = Some(device);
-    }
+    let handle = if TESTDEVICE {
+        Handle::from_name("test").unwrap()
+    } else {
+        let mut chosen_device = None;
+        for device in context.devices(true).unwrap() {
+            println!("Device:");
+            let name = device.name();
+            println!("\tname: {}", name);
+            println!("\tvendor: {}", device.vendor());
+            println!("\tmodel: {}", device.model());
+            println!("\ttype: {}", device.type_());
+            chosen_device = Some(device);
+        }
 
-    let device = chosen_device.unwrap();
-    let handle = device.open().unwrap();
+        let device = chosen_device.unwrap();
+        device.open().unwrap()
+    };
 
     println!("Options:");
     for option in handle.options() {
@@ -412,7 +424,9 @@ fn main() {
             continue;
         }
         println!("\t{}", optname);
-        println!("\t\t{}", option.desc());
+        for line in option.desc().lines() {
+            println!("\t\t{}", line);
+        }
         match optname {
             "mode" => {
                 print!("\t\t");
@@ -426,6 +440,9 @@ fn main() {
             "depth" => {
                 println!("\t\tCurrent depth: {}", option.get_int().unwrap());
             }
+            "test-picture" => {
+                option.set_string("Color pattern");
+            }
             _ => {}
         }
     }
@@ -433,6 +450,6 @@ fn main() {
     let parameters = handle.parameters().unwrap();
     println!("{:?}", parameters);
 
-    // let acq = handle.start().unwrap();
-    // let image = acq.get_image().unwrap();
+    let acq = handle.start().unwrap();
+    let image = acq.get_image().unwrap();
 }
