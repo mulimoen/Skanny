@@ -345,10 +345,17 @@ struct Acquisition<'a> {
 impl<'a> Acquisition<'a> {
     fn cancel(self) {}
 
-    fn get_image(self) -> Result<(), Error> {
+    fn get_image(self) -> Result<Image, Error> {
         let parameters = self.handle.parameters()?;
 
-        let bytesize = parameters.bytes_per_line() * parameters.depth();
+        let bytesize = parameters.bytes_per_line()
+            * (parameters.depth() / 8)
+            * parameters.lines()
+            * if parameters.format() == SANE_Frame_SANE_FRAME_GRAY {
+                1
+            } else {
+                3
+            };
         let mut image = vec![0_u8; bytesize as _];
 
         let mut buffer = &mut image[..];
@@ -378,7 +385,18 @@ impl<'a> Acquisition<'a> {
         }
         assert_eq!(buffer.len(), 0);
 
-        Ok(())
+        #[allow(non_upper_case_globals)]
+        match (parameters.format(), parameters.depth()) {
+            (SANE_Frame_SANE_FRAME_GRAY, 8) => Ok(Image::Gray8(
+                image::ImageBuffer::from_raw(
+                    parameters.pixels_per_line() as _,
+                    parameters.lines() as _,
+                    image,
+                )
+                .unwrap(),
+            )),
+            (_, _) => unimplemented!(),
+        }
     }
 }
 
@@ -388,7 +406,20 @@ impl Drop for Acquisition<'_> {
     }
 }
 
-const TESTDEVICE: bool = true;
+enum Image {
+    // Rgb8(image::ImageBuffer<image::Rgb<u8>, Vec<u8>>),
+    Gray8(image::ImageBuffer<image::Luma<u8>, Vec<u8>>),
+}
+
+impl Image {
+    fn save(&self, path: impl AsRef<std::path::Path>) -> image::ImageResult<()> {
+        match self {
+            Image::Gray8(im) => im.save(path),
+        }
+    }
+}
+
+const TESTDEVICE: bool = false;
 
 fn main() {
     let (context, version) = Context::init().unwrap();
@@ -451,4 +482,6 @@ fn main() {
 
     let acq = handle.start().unwrap();
     let image = acq.get_image().unwrap();
+
+    image.save("test.png").unwrap();
 }
