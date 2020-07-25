@@ -456,7 +456,6 @@ impl<'a> Acquisition<'a> {
                         return Err(err);
                     }
                 }
-                // std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
         assert_eq!(buffer.len(), 0);
@@ -476,7 +475,6 @@ impl<'a> Acquisition<'a> {
             };
         let mut image = vec![0_u8; bytesize as _];
 
-        // unsafe { checked(|| sane_set_io_mode(self.handle.0, SANE_FALSE as _))? };
         #[allow(non_upper_case_globals)]
         match parameters.format() {
             SANE_Frame_SANE_FRAME_GRAY => self.read_image(&mut image[..])?,
@@ -636,8 +634,19 @@ fn main() {
         let dir = std::path::Path::new(dir);
         std::fs::create_dir_all(&dir).unwrap();
         let scanbutton = scanbutton.unwrap();
+        let shouldstop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = shouldstop.clone();
+        ctrlc::set_handler(move || {
+            shouldstop.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .unwrap();
+
         'image_loop: loop {
+            println!("Scan by pushing scan, or interrupt with ctrl-c");
             'button_loop: loop {
+                if stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    break 'image_loop;
+                }
                 if scanbutton.get_bool().unwrap() {
                     break 'button_loop;
                 }

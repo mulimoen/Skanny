@@ -8,6 +8,7 @@ edition = "2018"
 sane-sys = { path = "sane-sys" }
 image = "0.23.7"
 gumdrop = "0.8.0"
+ctrlc = "3.1.5"
 
 [workspace]
 members = [
