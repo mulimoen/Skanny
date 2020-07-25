@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 sane-sys = { path = "sane-sys" }
 image = "0.23.7"
+gumdrop = "0.8.0"
 
 [workspace]
 members = [

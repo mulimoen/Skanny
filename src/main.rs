@@ -3,6 +3,8 @@
 use sane_sys::*;
 use std::ffi::CStr;
 
+use gumdrop::Options;
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum Error {
     Status(SANE_Status),
@@ -284,7 +286,9 @@ impl Opt {
         }))
     }
     fn get_string(&self) -> Result<String, Error> {
-        assert_eq!(self.descriptor.type_(), SANE_Value_Type_SANE_TYPE_STRING);
+        if self.descriptor.type_() != SANE_Value_Type_SANE_TYPE_STRING {
+            return Err(Error::WrongType);
+        }
         let mut val: Vec<u8> = vec![0; self.descriptor.size() as _];
         unsafe {
             checked(|| {
@@ -331,7 +335,7 @@ impl Opt {
         let list = unsafe { (*self.descriptor.0).constraint.word_list };
         assert!(!list.is_null());
         let len = unsafe { *list };
-        let list = unsafe { std::slice::from_raw_parts(list, len as _) };
+        let list = unsafe { std::slice::from_raw_parts(list, len as usize + 1) };
         Ok(&list[1..])
     }
     fn get_int(&self) -> Result<SANE_Int, Error> {
@@ -502,9 +506,17 @@ impl Image {
     }
 }
 
-const TESTDEVICE: bool = false;
+#[derive(Debug, Options)]
+struct CliOptions {
+    #[options(help = "Use a destdevice")]
+    testdevice: bool,
+    #[options(help = "Directory to store images")]
+    dir: Option<String>,
+}
 
 fn main() {
+    let cliopts = CliOptions::parse_args_default_or_exit();
+
     let (context, version) = Context::init().unwrap();
     println!(
         "Version: major: {} minor: {} build: {}",
@@ -512,7 +524,7 @@ fn main() {
         version.minor(),
         version.build()
     );
-    let handle = if TESTDEVICE {
+    let handle = if cliopts.testdevice {
         Handle::from_name("test").unwrap()
     } else {
         let mut chosen_device = None;
@@ -542,6 +554,9 @@ fn main() {
         }
         match optname {
             "mode" => {
+                if !cliopts.testdevice {
+                    option.set_string("Color").unwrap()
+                }
                 let active_mode = option.get_string().unwrap();
                 print!("\t\t");
                 for opt in option.string_constraints().unwrap() {
@@ -552,15 +567,14 @@ fn main() {
                     }
                 }
                 println!();
-                option.set_string("Color").unwrap();
+                option.set_string("color").unwrap()
             }
             "depth" => {
                 println!("\t\tCurrent depth: {}", option.get_int().unwrap());
             }
             "resolution" => {
-                let active_resolution = option.get_int().unwrap();
-                let mut max_resolution;
                 if let Ok(range) = option.get_range() {
+                    let active_resolution = option.get_int().unwrap();
                     println!(
                         "\t\tmin:{} max:{} quant:{} :: current: {}",
                         range.min(),
@@ -568,8 +582,9 @@ fn main() {
                         range.quant(),
                         active_resolution
                     );
-                    max_resolution = range.max();
                 } else {
+                    option.set_int(&mut 300).unwrap();
+                    let active_resolution = option.get_int().unwrap();
                     let resolutions = option.int_constraints().unwrap();
                     print!("\t\t");
                     for &res in resolutions {
@@ -580,9 +595,7 @@ fn main() {
                         }
                     }
                     println!();
-                    max_resolution = *resolutions.iter().max().unwrap();
                 }
-                option.set_int(&mut max_resolution).unwrap();
             }
             "test-picture" => {
                 option.set_string("Color pattern");
@@ -591,8 +604,29 @@ fn main() {
         }
     }
 
-    let acq = handle.start().unwrap();
-    let image = acq.get_image().unwrap();
+    if let Some(dir) = cliopts.dir.as_ref() {
+        let dir = std::path::Path::new(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        loop {
+            // Check button
+            let acq = handle.start().unwrap();
+            let image = acq.get_image().unwrap();
 
-    image.save("test.png").unwrap();
+            let now = std::time::SystemTime::now();
+            let since_unix = now.duration_since(std::time::UNIX_EPOCH).unwrap();
+
+            let mut imagepath = dir.join(format!(
+                "plate_{}:{}.png",
+                since_unix.as_secs(),
+                since_unix.subsec_millis()
+            ));
+            assert!(!imagepath.exists());
+
+            image.save(imagepath).unwrap();
+        }
+    } else {
+        let acq = handle.start().unwrap();
+        let image = acq.get_image().unwrap();
+        image.save("test.png").unwrap();
+    }
 }
