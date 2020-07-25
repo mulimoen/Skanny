@@ -225,6 +225,9 @@ impl Descriptor {
     fn size(&self) -> SANE_Int {
         unsafe { (*self.0).size }
     }
+    fn cap(&self) -> SANE_Word {
+        unsafe { (*self.0).cap }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -386,6 +389,26 @@ impl Opt {
         let range = unsafe { *(*self.descriptor.0).constraint.range };
         Ok(Range(range))
     }
+    fn get_bool(&self) -> Result<bool, Error> {
+        assert_eq!(self.descriptor.type_(), SANE_Value_Type_SANE_TYPE_BOOL);
+        assert_eq!(
+            self.descriptor.size(),
+            std::mem::size_of::<SANE_Bool>() as _
+        );
+        let mut val = 0;
+        unsafe {
+            checked(|| {
+                sane_control_option(
+                    *self.handle,
+                    self.index as i32,
+                    SANE_Action_SANE_ACTION_GET_VALUE,
+                    &mut val as *mut _ as _,
+                    std::ptr::null_mut(),
+                )
+            })?;
+        }
+        Ok(val == SANE_TRUE)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -542,6 +565,8 @@ fn main() {
         device.open().unwrap()
     };
 
+    let mut scanbutton = None;
+
     println!("Options:");
     for option in handle.options() {
         let optname = option.name();
@@ -583,7 +608,7 @@ fn main() {
                         active_resolution
                     );
                 } else {
-                    option.set_int(&mut 300).unwrap();
+                    // option.set_int(&mut 300).unwrap();
                     let active_resolution = option.get_int().unwrap();
                     let resolutions = option.int_constraints().unwrap();
                     print!("\t\t");
@@ -600,6 +625,9 @@ fn main() {
             "test-picture" => {
                 option.set_string("Color pattern");
             }
+            "scan" | "bool-soft-detect" => {
+                scanbutton = Some(option);
+            }
             _ => {}
         }
     }
@@ -607,8 +635,13 @@ fn main() {
     if let Some(dir) = cliopts.dir.as_ref() {
         let dir = std::path::Path::new(dir);
         std::fs::create_dir_all(&dir).unwrap();
-        loop {
-            // Check button
+        let scanbutton = scanbutton.unwrap();
+        'image_loop: loop {
+            'button_loop: loop {
+                if scanbutton.get_bool().unwrap() {
+                    break 'button_loop;
+                }
+            }
             let acq = handle.start().unwrap();
             let image = acq.get_image().unwrap();
 
