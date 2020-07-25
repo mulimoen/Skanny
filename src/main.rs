@@ -6,6 +6,7 @@ use std::ffi::CStr;
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum Error {
     Status(SANE_Status),
+    WrongType,
 }
 
 impl Error {
@@ -33,6 +34,7 @@ impl std::fmt::Display for Error {
                 SANE_Status_SANE_STATUS_ACCESS_DENIED => write!(f, "Access denied"),
                 _ => write!(f, "UNKNOWN ERROR: {}", status),
             },
+            Error::WrongType => write!(f, "Expected another type here"),
         }
     }
 }
@@ -320,8 +322,23 @@ impl Opt {
 
         Ok(())
     }
+    fn int_constraints(&self) -> Result<&[SANE_Word], Error> {
+        #[allow(non_upper_case_globals)]
+        match unsafe { (*self.descriptor.0) }.constraint_type {
+            SANE_Constraint_Type_SANE_CONSTRAINT_WORD_LIST => (),
+            typ => panic!("type {} is not a word constraint", typ),
+        }
+        let list = unsafe { (*self.descriptor.0).constraint.word_list };
+        assert!(!list.is_null());
+        let len = unsafe { *list };
+        let list = unsafe { std::slice::from_raw_parts(list, len as _) };
+        Ok(&list[1..])
+    }
     fn get_int(&self) -> Result<SANE_Int, Error> {
-        assert_eq!(self.descriptor.type_(), SANE_Value_Type_SANE_TYPE_INT);
+        assert!(
+            self.descriptor.type_() == SANE_Value_Type_SANE_TYPE_INT
+                || self.descriptor.type_() == SANE_Value_Type_SANE_TYPE_FIXED
+        );
         assert_eq!(self.descriptor.size(), std::mem::size_of::<SANE_Int>() as _);
         let mut val = 0;
         unsafe {
@@ -336,6 +353,49 @@ impl Opt {
             })?;
         }
         Ok(val)
+    }
+    fn set_int(&self, val: &mut i32) -> Result<(), Error> {
+        assert!(
+            self.descriptor.type_() == SANE_Value_Type_SANE_TYPE_INT
+                || self.descriptor.type_() == SANE_Value_Type_SANE_TYPE_FIXED
+        );
+        assert_eq!(self.descriptor.size(), std::mem::size_of::<SANE_Int>() as _);
+        unsafe {
+            checked(|| {
+                sane_control_option(
+                    *self.handle,
+                    self.index as i32,
+                    SANE_Action_SANE_ACTION_SET_VALUE,
+                    val as *mut _ as _,
+                    std::ptr::null_mut(),
+                )
+            })?;
+        }
+        Ok(())
+    }
+    fn get_range(&self) -> Result<Range, Error> {
+        #[allow(non_upper_case_globals)]
+        match unsafe { (*self.descriptor.0) }.constraint_type {
+            SANE_Constraint_Type_SANE_CONSTRAINT_RANGE => (),
+            typ => return Err(Error::WrongType),
+        }
+        let range = unsafe { *(*self.descriptor.0).constraint.range };
+        Ok(Range(range))
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Range(SANE_Range);
+
+impl Range {
+    fn min(&self) -> SANE_Word {
+        self.0.min
+    }
+    fn max(&self) -> SANE_Word {
+        self.0.max
+    }
+    fn quant(&self) -> SANE_Word {
+        self.0.quant
     }
 }
 
@@ -497,15 +557,39 @@ fn main() {
             "depth" => {
                 println!("\t\tCurrent depth: {}", option.get_int().unwrap());
             }
+            "resolution" => {
+                let active_resolution = option.get_int().unwrap();
+                let mut max_resolution;
+                if let Ok(range) = option.get_range() {
+                    println!(
+                        "\t\tmin:{} max:{} quant:{} :: current: {}",
+                        range.min(),
+                        range.max(),
+                        range.quant(),
+                        active_resolution
+                    );
+                    max_resolution = range.max();
+                } else {
+                    let resolutions = option.int_constraints().unwrap();
+                    print!("\t\t");
+                    for &res in resolutions {
+                        if res == active_resolution {
+                            print!("[{}]\t", res);
+                        } else {
+                            print!("{}\t", res);
+                        }
+                    }
+                    println!();
+                    max_resolution = *resolutions.iter().max().unwrap();
+                }
+                option.set_int(&mut max_resolution).unwrap();
+            }
             "test-picture" => {
                 option.set_string("Color pattern");
             }
             _ => {}
         }
     }
-
-    let parameters = handle.parameters().unwrap();
-    println!("{:?}", parameters);
 
     let acq = handle.start().unwrap();
     let image = acq.get_image().unwrap();
