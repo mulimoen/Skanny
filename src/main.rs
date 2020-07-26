@@ -606,7 +606,7 @@ fn main() {
                         active_resolution
                     );
                 } else {
-                    // option.set_int(&mut 300).unwrap();
+                    option.set_int(&mut 600).unwrap();
                     let active_resolution = option.get_int().unwrap();
                     let resolutions = option.int_constraints().unwrap();
                     print!("\t\t");
@@ -648,6 +648,7 @@ fn main() {
                     break 'image_loop;
                 }
                 if scanbutton.get_bool().unwrap() {
+                    println!("SCANNING...");
                     break 'button_loop;
                 }
             }
@@ -658,12 +659,13 @@ fn main() {
             let since_unix = now.duration_since(std::time::UNIX_EPOCH).unwrap();
 
             let mut imagepath = dir.join(format!(
-                "plate_{}:{}.png",
+                "plate_{}_{}.png",
                 since_unix.as_secs(),
                 since_unix.subsec_millis()
             ));
             assert!(!imagepath.exists());
 
+            println!("SAVING IMAGE...");
             image.save(imagepath).unwrap();
         }
     } else {
